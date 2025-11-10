@@ -38,3 +38,4 @@ const FormattedMessage = ({ content, questions, hasQuestions }: FormattedMessage
 
 export default FormattedMessage;
 
+

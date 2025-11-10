@@ -16,6 +16,10 @@ export interface Assignment {
   daysUntilDue: number;
   points: number;
   htmlUrl?: string;
+  isCompleted?: boolean;
+  submissionStatus?: string;
+  submissionScore?: number | null;
+  submissionGrade?: string | null;
 }
 
 export interface CanvasConnection {
@@ -81,9 +85,10 @@ export const testCanvasConnection = async (): Promise<CanvasConnection> => {
 };
 
 /**
- * Get upcoming assignments from Canvas
+ * Get assignments from Canvas
+ * @param includePast - Whether to include past assignments (default: false)
  */
-export const getAssignments = async (): Promise<Assignment[]> => {
+export const getAssignments = async (includePast = false): Promise<Assignment[]> => {
   const { canvasUrl, apiToken } = getCanvasCredentials();
 
   if (!apiToken) {
@@ -95,7 +100,7 @@ export const getAssignments = async (): Promise<Assignment[]> => {
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ canvasUrl, apiToken }),
+    body: JSON.stringify({ canvasUrl, apiToken, includePast }),
   });
 
   if (!response.ok) {
@@ -115,6 +120,10 @@ export const getAssignments = async (): Promise<Assignment[]> => {
     daysUntilDue: calculateDaysUntilDue(assignment.due_at),
     points: assignment.points_possible || 0,
     htmlUrl: assignment.html_url,
+    isCompleted: assignment.is_completed || false,
+    submissionStatus: assignment.submission_status || null,
+    submissionScore: assignment.submission_score || null,
+    submissionGrade: assignment.submission_grade || null,
   }));
 };
 

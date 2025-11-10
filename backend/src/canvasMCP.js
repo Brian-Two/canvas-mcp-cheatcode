@@ -48,8 +48,8 @@ class CanvasMCPClient {
     return this.makeRequest('/courses?enrollment_state=active&include[]=total_scores');
   }
 
-  // Get upcoming assignments across all courses
-  async getUpcomingAssignments(limit = 20) {
+  // Get assignments across all courses
+  async getUpcomingAssignments(limit = 20, includePast = false) {
     const courses = await this.getCourses();
     if (courses.error) {
       console.error('Failed to get courses:', courses.error);
@@ -64,19 +64,41 @@ class CanvasMCPClient {
     const allAssignments = [];
     
     for (const course of courses) {
+      // Fetch assignments with submission data included
       const assignments = await this.makeRequest(
-        `/courses/${course.id}/assignments?order_by=due_at&per_page=10`
+        `/courses/${course.id}/assignments?order_by=due_at&per_page=100&include[]=submission`
       );
       
       if (!assignments.error && Array.isArray(assignments)) {
-        const upcoming = assignments
-          .filter(a => {
-            if (!a.due_at) return false;
+        // Process assignments and check submission status
+        for (const a of assignments) {
+          if (!a.due_at) continue;
+          
+          // Check if assignment should be included
+          if (!includePast) {
             const dueDate = new Date(a.due_at);
             const now = new Date();
-            return dueDate > now;
-          })
-          .map(a => ({
+            if (dueDate <= now) continue;
+          }
+
+          // Check submission status
+          let isCompleted = false;
+          let submissionStatus = null;
+          let submissionScore = null;
+          let submissionGrade = null;
+          
+          // Check if submission exists (from include[]=submission parameter)
+          if (a.submission) {
+            submissionStatus = a.submission.workflow_state;
+            submissionScore = a.submission.score;
+            submissionGrade = a.submission.grade;
+            // Assignment is completed if submitted, graded, or complete
+            isCompleted = submissionStatus === 'submitted' || 
+                         submissionStatus === 'graded' || 
+                         submissionStatus === 'complete';
+          }
+
+          allAssignments.push({
             id: a.id,
             name: a.name,
             course_id: course.id,
@@ -85,17 +107,38 @@ class CanvasMCPClient {
             points_possible: a.points_possible,
             description: a.description,
             html_url: a.html_url,
-            submission_types: a.submission_types
-          }));
-        
-        allAssignments.push(...upcoming);
+            submission_types: a.submission_types,
+            is_completed: isCompleted,
+            submission_status: submissionStatus,
+            submission_score: submissionScore,
+            submission_grade: submissionGrade
+          });
+        }
       }
     }
 
-    // Sort by due date and limit
-    return allAssignments
-      .sort((a, b) => new Date(a.due_at) - new Date(b.due_at))
-      .slice(0, limit);
+    // Sort by due date (upcoming first, then past assignments)
+    const sorted = allAssignments.sort((a, b) => {
+      const dateA = new Date(a.due_at);
+      const dateB = new Date(b.due_at);
+      const now = new Date();
+      
+      // If including past, show upcoming assignments first (soonest first)
+      // then past assignments (most recent past first)
+      if (includePast) {
+        const aIsPast = dateA < now;
+        const bIsPast = dateB < now;
+        
+        if (!aIsPast && bIsPast) return -1; // Upcoming before past
+        if (aIsPast && !bIsPast) return 1; // Past after upcoming
+        if (aIsPast && bIsPast) return dateB - dateA; // Most recent past first
+        return dateA - dateB; // Soonest upcoming first
+      }
+      
+      return dateA - dateB; // Default: soonest first
+    });
+
+    return sorted.slice(0, limit);
   }
 
   // Get specific assignment details

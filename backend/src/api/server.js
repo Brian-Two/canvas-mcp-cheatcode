@@ -393,11 +393,12 @@ app.post('/api/mcp/github/execute', async (req, res) => {
 // Assignment Endpoints
 app.post('/api/assignments', async (req, res) => {
   try {
-    const { canvasUrl, apiToken, limit = 20 } = req.body;
+    const { canvasUrl, apiToken, limit = 50, includePast = true } = req.body;
     
     console.log('📚 Fetching assignments...');
     console.log('  Canvas URL:', canvasUrl);
     console.log('  Has Token:', !!apiToken);
+    console.log('  Include Past:', includePast);
     
     if (!apiToken) {
       return res.status(400).json({ 
@@ -419,7 +420,7 @@ app.post('/api/assignments', async (req, res) => {
 
       console.log('  Using Base URL:', canvasClient.baseUrl);
 
-      const assignments = await canvasClient.getUpcomingAssignments(limit);
+      const assignments = await canvasClient.getUpcomingAssignments(limit, includePast);
       
       if (assignments.error) {
         console.error('❌ Canvas API Error:', assignments.error);

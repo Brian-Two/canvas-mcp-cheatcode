@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { CheckCircle, XCircle, Eye, EyeOff, ChevronDown, ChevronUp, Plus, Trash2, LogOut } from "lucide-react";
+import { CheckCircle, XCircle, Eye, EyeOff, ChevronDown, ChevronUp, Plus, Trash2, LogOut, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,6 +10,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 
@@ -19,10 +25,43 @@ interface McpServer {
   name: string;
   apiKey: string;
   isConnected: boolean;
+  isTesting?: boolean;
+  serverId?: string;
 }
 
+interface McpTool {
+  name: string;
+  description: string;
+  mcpType: string;
+  input_schema?: any;
+}
+
+interface ServerTools {
+  [serverId: string]: {
+    enabled: string[];
+  };
+}
+
+const DEFAULT_CANVAS_TOOLS: McpTool[] = [
+  {
+    name: "list_upcoming_assignments",
+    description: "List upcoming assignments from Canvas for the next few weeks.",
+    mcpType: "canvas"
+  },
+  {
+    name: "get_course_materials",
+    description: "Retrieve modules, files, and other course content from Canvas.",
+    mcpType: "canvas"
+  },
+  {
+    name: "get_assignment_details",
+    description: "Fetch due dates, instructions, and submission info for a specific assignment.",
+    mcpType: "canvas"
+  }
+];
+
 const MCP_SERVER_TYPES = [
-  { value: "google-drive", label: "Google Drive", placeholder: "OAuth token or API key" },
+  { value: "google_drive", label: "Google Drive", placeholder: "OAuth token or API key" },
   { value: "github", label: "GitHub", placeholder: "Personal access token" },
   { value: "notion", label: "Notion", placeholder: "Integration token" },
   { value: "slack", label: "Slack", placeholder: "Bot token" },
@@ -38,6 +77,9 @@ const Connections = () => {
   const [showInstructions, setShowInstructions] = useState(false);
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [showTokens, setShowTokens] = useState<Record<string, boolean>>({});
+  const [expandedServers, setExpandedServers] = useState<Record<string, boolean>>({});
+  const [availableTools, setAvailableTools] = useState<McpTool[]>([]);
+  const [enabledTools, setEnabledTools] = useState<ServerTools>({});
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -62,12 +104,73 @@ const Connections = () => {
     if (storedMcpServers) {
       try {
         const servers = JSON.parse(storedMcpServers);
-        setMcpServers(servers);
+        // Reset testing state on load (in case page was refreshed during test)
+        const serversWithResetTesting = servers.map((s: McpServer) => ({
+          ...s,
+          isTesting: false
+        }));
+        setMcpServers(serversWithResetTesting);
+        localStorage.setItem("astar_mcp_servers", JSON.stringify(serversWithResetTesting));
       } catch (error) {
         console.error("Failed to load MCP servers:", error);
       }
     }
+
+    // Load enabled tools from localStorage
+    const storedEnabledTools = localStorage.getItem("astar_mcp_enabled_tools");
+    if (storedEnabledTools) {
+      try {
+        setEnabledTools(JSON.parse(storedEnabledTools));
+      } catch (error) {
+        console.error("Failed to load enabled tools:", error);
+      }
+    }
+
+    // Fetch available tools
+    fetchAvailableTools();
   }, []);
+
+  // Fetch tools when connected servers change
+  useEffect(() => {
+    const connectedServers = mcpServers.filter(s => s.isConnected && s.serverId);
+    if (connectedServers.length > 0) {
+      fetchAvailableTools();
+    }
+  }, [mcpServers]);
+
+  const fetchAvailableTools = async () => {
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const response = await fetch(`${API_URL}/api/mcp/tools`);
+      const result = await response.json();
+      
+      if (result.success) {
+        setAvailableTools(result.tools || []);
+      }
+    } catch (error) {
+      console.error("Failed to fetch tools:", error);
+    }
+  };
+
+  const toggleTool = (serverId: string, toolName: string) => {
+    setEnabledTools(prev => {
+      const serverTools = prev[serverId] || { enabled: [] };
+      const isEnabled = serverTools.enabled.includes(toolName);
+      
+      const updated = {
+        ...prev,
+        [serverId]: {
+          enabled: isEnabled
+            ? serverTools.enabled.filter(t => t !== toolName)
+            : [...serverTools.enabled, toolName]
+        }
+      };
+      
+      // Save to localStorage
+      localStorage.setItem("astar_mcp_enabled_tools", JSON.stringify(updated));
+      return updated;
+    });
+  };
 
   const handleTestConnection = () => {
     if (!university || !apiToken || (university === "custom" && !customUrl)) {
@@ -82,6 +185,7 @@ const Connections = () => {
     // Simulate connection test
     setTimeout(() => {
       setIsConnected(true);
+      fetchAvailableTools();
       toast({
         title: "Connection Successful",
         description: "Your Canvas account is now connected",
@@ -140,8 +244,14 @@ const Connections = () => {
     };
     const updatedServers = [...mcpServers, newServer];
     setMcpServers(updatedServers);
+    // Expand the new server by default
+    setExpandedServers(prev => ({ ...prev, [newServer.id]: true }));
     // Save to localStorage
     localStorage.setItem("astar_mcp_servers", JSON.stringify(updatedServers));
+  };
+
+  const toggleServerExpansion = (id: string) => {
+    setExpandedServers(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
   const handleRemoveMcpServer = (id: string) => {
@@ -175,44 +285,149 @@ const Connections = () => {
       return;
     }
 
+    // Set testing state
+    const updatedServersTesting = mcpServers.map(s => 
+      s.id === id ? { ...s, isTesting: true } : s
+    );
+    setMcpServers(updatedServersTesting);
+    localStorage.setItem("astar_mcp_servers", JSON.stringify(updatedServersTesting));
+
     try {
-      // Call backend API to add/test MCP server
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-      const response = await fetch(`${API_URL}/api/mcp/servers`, {
+      let serverId: string | null = null;
+      
+      // Step 1: Check if server already exists in backend
+      const listResponse = await fetch(`${API_URL}/api/mcp/servers`);
+      const listResult = await listResponse.json();
+      
+      if (listResult.success && listResult.servers) {
+        // Look for existing server by type and name
+        const existingServer = listResult.servers.find((s: any) => 
+          s.type === server.type
+        );
+        
+        if (existingServer) {
+          serverId = existingServer.id;
+          // Update existing server with new credentials
+          const updateResponse = await fetch(`${API_URL}/api/mcp/servers/${serverId}`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              apiKey: server.apiKey,
+              name: server.name || `${server.type} Connection`,
+            }),
+          });
+          
+          const updateResult = await updateResponse.json();
+          if (!updateResult.success) {
+            throw new Error(updateResult.error || 'Failed to update server');
+          }
+        }
+      }
+      
+      // Step 2: Create server if it doesn't exist
+      if (!serverId) {
+        const createResponse = await fetch(`${API_URL}/api/mcp/servers`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            type: server.type,
+            name: server.name || `${server.type} Connection`,
+            apiKey: server.apiKey,
+          }),
+        });
+
+        const createResult = await createResponse.json();
+        
+        if (!createResult.success) {
+          throw new Error(createResult.error || 'Failed to create server');
+        }
+        
+        serverId = createResult.server.id;
+      }
+
+      // Step 3: Actually test the connection using the test endpoint
+      if (!serverId) {
+        throw new Error('Server ID not found after creation');
+      }
+      
+      const testResponse = await fetch(`${API_URL}/api/mcp/servers/${serverId}/test`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          type: server.type,
-          name: server.name || `${server.type} Connection`,
-          apiKey: server.apiKey,
-        }),
       });
 
-      const result = await response.json();
+      const testResult = await testResponse.json();
 
-      if (result.success) {
+      if (testResult.success) {
+        // Update local state with server ID and connection status
         const updatedServers = mcpServers.map(s => 
-          s.id === id ? { ...s, isConnected: true } : s
+          s.id === id ? { ...s, isConnected: true, isTesting: false, serverId: serverId } : s
         );
         setMcpServers(updatedServers);
         // Save to localStorage
         localStorage.setItem("astar_mcp_servers", JSON.stringify(updatedServers));
         
+        // Fetch tools and initialize enabled tools for this server (all enabled by default)
+        if (serverId) {
+          // Fetch latest tools
+          const toolsResponse = await fetch(`${API_URL}/api/mcp/tools`);
+          const toolsResult = await toolsResponse.json();
+          
+          if (toolsResult.success) {
+            const tools = toolsResult.tools || [];
+            setAvailableTools(tools);
+            
+            // Initialize enabled tools (all enabled by default)
+            setEnabledTools(prev => {
+              if (!prev[serverId]) {
+                const serverTools = tools
+                  .filter(tool => tool.mcpType === server.type)
+                  .map(tool => tool.name);
+                
+                const updated = {
+                  ...prev,
+                  [serverId]: { enabled: serverTools }
+                };
+                localStorage.setItem("astar_mcp_enabled_tools", JSON.stringify(updated));
+                return updated;
+              }
+              return prev;
+            });
+          }
+        }
+        
         toast({
           title: "Connection Successful",
-          description: `${server.type} is now connected to ASTAR backend`,
+          description: testResult.message || `${server.type} is now connected and tested successfully`,
         });
       } else {
+        // Test failed
+        const updatedServers = mcpServers.map(s => 
+          s.id === id ? { ...s, isConnected: false, isTesting: false } : s
+        );
+        setMcpServers(updatedServers);
+        localStorage.setItem("astar_mcp_servers", JSON.stringify(updatedServers));
+        
         toast({
-          title: "Connection Failed",
-          description: result.error || "Could not connect to MCP server",
+          title: "Connection Test Failed",
+          description: testResult.error || "Could not connect to the MCP server. Please check your credentials.",
           variant: "destructive",
         });
       }
     } catch (error) {
       console.error('MCP connection error:', error);
+      const updatedServers = mcpServers.map(s => 
+        s.id === id ? { ...s, isConnected: false, isTesting: false } : s
+      );
+      setMcpServers(updatedServers);
+      localStorage.setItem("astar_mcp_servers", JSON.stringify(updatedServers));
+      
       toast({
         title: "Connection Error",
         description: error instanceof Error ? error.message : "Could not connect to backend",
@@ -226,17 +441,15 @@ const Connections = () => {
   };
 
   return (
-    <div className="min-h-screen pb-20">
-      {/* Header */}
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
-        <h1 className="text-3xl font-bold mb-2">Connections</h1>
-        <p className="text-muted-foreground">
-          Connect your Canvas account and MCP servers to enhance ASTAR
-        </p>
-      </div>
+    <TooltipProvider>
+      <div className="min-h-screen pb-20">
+        {/* Header */}
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
+          <h1 className="text-3xl font-bold mb-2">Connections</h1>
+        </div>
 
-      {/* Content */}
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+        {/* Content */}
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 space-y-8">
         {/* Canvas Connection */}
         <div className="bg-card border border-border rounded-xl p-6 space-y-6">
           <h2 className="text-xl font-semibold text-foreground">Canvas LMS</h2>
@@ -353,6 +566,38 @@ const Connections = () => {
               )}
             </div>
 
+            {/* Canvas Tools */}
+            {isConnected && (
+              <div className="border border-border rounded-lg p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Wrench className="w-4 h-4 text-muted-foreground" />
+                  <h3 className="text-sm font-semibold text-foreground">Available Canvas Tools</h3>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {(availableTools.filter(tool => tool.mcpType === "canvas").length > 0
+                    ? availableTools.filter(tool => tool.mcpType === "canvas")
+                    : DEFAULT_CANVAS_TOOLS)
+                    .map(tool => (
+                      <Tooltip key={tool.name}>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex items-center px-3 py-2 rounded-lg border border-border bg-card text-sm font-medium text-foreground cursor-default hover:border-foreground/20 transition-colors">
+                            {tool.name.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase())}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          <p className="text-sm">{tool.description}</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    ))}
+                </div>
+                {availableTools.filter(tool => tool.mcpType === "canvas").length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Showing default Canvas tools. Connect your Canvas account or refresh to load live tools from the server.
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* Actions */}
             <div className="flex gap-3 pt-4">
               <Button
@@ -389,12 +634,7 @@ const Connections = () => {
         {/* MCP Servers Section */}
         <div className="bg-card border border-border rounded-xl p-6 space-y-6">
           <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">MCP Servers</h2>
-              <p className="text-sm text-muted-foreground mt-1">
-                Connect external services to enhance ASTAR's capabilities
-              </p>
-            </div>
+            <h2 className="text-xl font-semibold text-foreground">MCP Servers</h2>
             <Button
               onClick={handleAddMcpServer}
               variant="outline"
@@ -413,38 +653,81 @@ const Connections = () => {
             </div>
           ) : (
             <div className="space-y-4">
-              {mcpServers.map((server) => (
+              {mcpServers.map((server) => {
+                const isExpanded = expandedServers[server.id] ?? false;
+                return (
                 <div
                   key={server.id}
-                  className="border border-border rounded-lg p-4 space-y-4"
+                  className="border border-border rounded-lg overflow-hidden"
                 >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      {server.isConnected ? (
-                        <CheckCircle className="w-5 h-5 text-primary" />
-                      ) : (
-                        <XCircle className="w-5 h-5 text-muted-foreground" />
-                      )}
-                      <div>
-                        <p className="font-medium text-foreground">
-                          {server.type ? MCP_SERVER_TYPES.find(t => t.value === server.type)?.label : "New Server"}
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          {server.isConnected ? "Connected" : "Not connected"}
-                        </p>
-                      </div>
+                  {/* Header - Always visible */}
+                  <div className="p-4">
+                    <div className="flex items-center justify-between">
+                      <button
+                        onClick={() => toggleServerExpansion(server.id)}
+                        className="flex items-center gap-3 flex-1 text-left hover:opacity-80 transition-opacity"
+                      >
+                        {server.isConnected ? (
+                          <CheckCircle className="w-5 h-5 text-primary flex-shrink-0" />
+                        ) : (
+                          <XCircle className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium text-foreground">
+                              {server.type ? MCP_SERVER_TYPES.find(t => t.value === server.type)?.label : "New Server"}
+                            </p>
+                            {/* Status indicator light */}
+                            <div
+                              className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                                server.isTesting
+                                  ? 'bg-orange-500 animate-pulse'
+                                  : server.isConnected
+                                  ? 'bg-primary'
+                                  : 'bg-red-500'
+                              }`}
+                              title={
+                                server.isTesting
+                                  ? 'Testing connection...'
+                                  : server.isConnected
+                                  ? 'Connected'
+                                  : 'Not connected'
+                              }
+                            />
+                          </div>
+                          <p className="text-sm text-muted-foreground mt-0.5">
+                            {server.isTesting
+                              ? 'Testing...'
+                              : server.isConnected
+                              ? 'Connected'
+                              : 'Not connected'}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isExpanded ? (
+                            <ChevronUp className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                          )}
+                        </div>
+                      </button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveMcpServer(server.id);
+                        }}
+                        className="text-destructive hover:text-destructive flex-shrink-0"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleRemoveMcpServer(server.id)}
-                      className="text-destructive hover:text-destructive"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
                   </div>
 
-                  <div className="space-y-3">
+                  {/* Expandable content */}
+                  {isExpanded && (
+                    <div className="px-4 pb-4 space-y-3 border-t border-border pt-4">
                     <div className="space-y-2">
                       <Label>Server Type</Label>
                       <Select
@@ -505,20 +788,73 @@ const Connections = () => {
                           onClick={() => handleTestMcpConnection(server.id)}
                           variant="outline"
                           className="w-full"
-                          disabled={!server.type || !server.apiKey}
+                          disabled={!server.type || !server.apiKey || server.isTesting}
                         >
-                          Test Connection
+                          {server.isTesting ? "Testing..." : "Test Connection"}
                         </Button>
                       </>
                     )}
-                  </div>
+
+                    {/* Tools Section - Only show for connected servers */}
+                    {server.isConnected && server.serverId && server.type && (
+                      <div className="space-y-2 pt-2 border-t border-border">
+                        <div className="flex items-center gap-2 mb-3">
+                          <Wrench className="w-4 h-4 text-muted-foreground" />
+                          <Label className="text-sm font-semibold">Available Tools</Label>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {availableTools
+                            .filter(tool => tool.mcpType === server.type)
+                            .map((tool) => {
+                              const serverTools = enabledTools[server.serverId];
+                              // Default to enabled if serverTools doesn't exist, otherwise check the enabled array
+                              const isEnabled = serverTools 
+                                ? serverTools.enabled.includes(tool.name)
+                                : true;
+                              
+                              return (
+                                <Tooltip key={tool.name}>
+                                  <TooltipTrigger asChild>
+                                    <button
+                                      onClick={() => toggleTool(server.serverId!, tool.name)}
+                                      className={`inline-flex items-center px-3 py-2 rounded-lg border transition-all text-left ${
+                                        isEnabled
+                                          ? 'bg-card border-border hover:border-foreground/20'
+                                          : 'bg-muted/60 border-border hover:bg-muted/70'
+                                      }`}
+                                    >
+                                      <span className={`text-sm font-medium truncate ${
+                                        isEnabled ? 'text-foreground' : 'text-muted-foreground'
+                                      }`}>
+                                        {tool.name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                      </span>
+                                    </button>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="right" className="max-w-xs">
+                                    <p className="text-sm">{tool.description}</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              );
+                            })}
+                        </div>
+                        {availableTools.filter(tool => tool.mcpType === server.type).length === 0 && (
+                          <p className="text-sm text-muted-foreground text-center py-2">
+                            No tools available for this server type
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    </div>
+                  )}
                 </div>
-              ))}
+              );
+              })}
             </div>
           )}
         </div>
       </div>
     </div>
+    </TooltipProvider>
   );
 };
 

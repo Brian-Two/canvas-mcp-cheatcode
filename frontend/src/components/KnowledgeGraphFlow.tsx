@@ -6,6 +6,7 @@ import ReactFlow, {
   Background,
   useNodesState,
   useEdgesState,
+  addEdge,
   BackgroundVariant,
   MarkerType,
   Panel,
@@ -13,7 +14,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { Check, Lock, Sparkles, Circle, Brain } from 'lucide-react';
-import dagre from 'dagre';
+import { treeToGraph, conceptsToTree, TreeNode } from '@/lib/mindMapUtils';
 
 export interface ConceptNode {
   id: string;
@@ -110,107 +111,109 @@ const nodeTypes = {
   concept: ConceptNodeComponent,
 };
 
-// Dagre layout for hierarchical arrangement
-const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => {
-  const dagreGraph = new dagre.graphlib.Graph();
-  dagreGraph.setDefaultEdgeLabel(() => ({}));
-  dagreGraph.setGraph({ rankdir: direction, ranksep: 100, nodesep: 80 });
-
-  nodes.forEach((node) => {
-    dagreGraph.setNode(node.id, { width: 150, height: 80 });
-  });
-
-  edges.forEach((edge) => {
-    dagreGraph.setEdge(edge.source, edge.target);
-  });
-
-  dagre.layout(dagreGraph);
-
-  const layoutedNodes = nodes.map((node) => {
-    const nodeWithPosition = dagreGraph.node(node.id);
-    return {
-      ...node,
-      position: {
-        x: nodeWithPosition.x - 75,
-        y: nodeWithPosition.y - 40,
-      },
-    };
-  });
-
-  return { nodes: layoutedNodes, edges };
-};
-
 const KnowledgeGraphFlow: React.FC<KnowledgeGraphFlowProps> = ({
   concepts,
   currentConcept,
   onConceptClick,
   className = '',
 }) => {
-  // Convert concepts to ReactFlow nodes
-  const initialNodes: Node[] = useMemo(
-    () =>
-      concepts.map((concept) => ({
-        id: concept.id,
+  // Convert concepts to tree structure, then to graph using bisonbytes25 algorithm
+  const { initialNodes, initialEdges } = useMemo(() => {
+    if (concepts.length === 0) {
+      return { initialNodes: [], initialEdges: [] };
+    }
+
+    // Convert concepts to tree format
+    const treeData = conceptsToTree(concepts);
+    
+    // Convert tree to graph using horizontal layout
+    const graphResult = treeToGraph(treeData);
+    
+    if (!graphResult) {
+      return { initialNodes: [], initialEdges: [] };
+    }
+
+    const [graphNodes, graphEdges] = graphResult;
+
+    // Enhance nodes with concept data
+    const enhancedNodes: Node[] = graphNodes.map((node, idx) => {
+      // Map back to concept by index (simple mapping for now)
+      const concept = concepts[idx] || concepts[0];
+      
+      return {
+        id: node.id,
         type: 'concept',
-        position: { x: concept.x, y: concept.y },
+        position: node.position,
         data: {
-          label: concept.label,
+          label: node.data.label,
           status: concept.status,
-          id: concept.id,
+          id: node.id,
           onClick: onConceptClick,
         },
         style: {
           background: 'transparent',
           border: 'none',
         },
-      })),
-    [concepts, onConceptClick]
+      };
+    });
+
+    // Enhance edges with styling
+    const enhancedEdges: Edge[] = graphEdges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: 'smoothstep',
+      animated: false,
+      style: {
+        stroke: '#4B5563',
+        strokeWidth: 2,
+      },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: '#4B5563',
+      },
+    }));
+
+    return { initialNodes: enhancedNodes, initialEdges: enhancedEdges };
+  }, [concepts, onConceptClick]);
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  const onConnect = useCallback(
+    (params: any) => setEdges((eds) => addEdge(params, eds)),
+    [setEdges]
   );
-
-  // Convert connections to ReactFlow edges
-  const initialEdges: Edge[] = useMemo(
-    () => {
-      const edges: Edge[] = [];
-      concepts.forEach((concept) => {
-        concept.connections.forEach((targetId) => {
-          edges.push({
-            id: `${concept.id}-${targetId}`,
-            source: concept.id,
-            target: targetId,
-            type: 'smoothstep',
-            animated: concept.id === currentConcept || targetId === currentConcept,
-            style: {
-              stroke: concept.id === currentConcept || targetId === currentConcept ? '#3fad93' : '#4B5563',
-              strokeWidth: 2,
-            },
-            markerEnd: {
-              type: MarkerType.ArrowClosed,
-              color: concept.id === currentConcept || targetId === currentConcept ? '#3fad93' : '#4B5563',
-            },
-          });
-        });
-      });
-      return edges;
-    },
-    [concepts, currentConcept]
-  );
-
-  const { nodes: layoutedNodes, edges: layoutedEdges } = useMemo(() => {
-    return getLayoutedElements(initialNodes, initialEdges);
-  }, [initialNodes, initialEdges]);
-
-  const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
 
   // Update nodes and edges when concepts change
   useEffect(() => {
-    const { nodes: newLayoutedNodes, edges: newLayoutedEdges } = getLayoutedElements(
-      initialNodes,
-      initialEdges
-    );
-    setNodes(newLayoutedNodes);
-    setEdges(newLayoutedEdges);
-  }, [concepts, currentConcept]);
+    setNodes(initialNodes);
+    setEdges(initialEdges);
+  }, [concepts, initialNodes, initialEdges, setNodes, setEdges]);
+
+  // Update edge animation based on current concept
+  useEffect(() => {
+    if (currentConcept) {
+      setEdges((eds) =>
+        eds.map((edge) => {
+          const isActive = edge.source === currentConcept || edge.target === currentConcept;
+          return {
+            ...edge,
+            animated: isActive,
+            style: {
+              ...edge.style,
+              stroke: isActive ? '#3fad93' : '#4B5563',
+              strokeWidth: isActive ? 3 : 2,
+            },
+            markerEnd: {
+              ...edge.markerEnd,
+              color: isActive ? '#3fad93' : '#4B5563',
+            },
+          };
+        })
+      );
+    }
+  }, [currentConcept, setEdges]);
 
   if (concepts.length === 0) {
     return (
@@ -233,12 +236,13 @@ const KnowledgeGraphFlow: React.FC<KnowledgeGraphFlowProps> = ({
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
         nodeTypes={nodeTypes}
         fitView
         attributionPosition="bottom-left"
         className="bg-background"
       >
-        <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#374151" />
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} color="#374151" />
         <Controls className="bg-card border border-border rounded-lg" />
         <MiniMap
           nodeColor={(node: any) => {

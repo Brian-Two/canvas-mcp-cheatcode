@@ -246,3 +246,4 @@ Free tier: Manual exports via SQL Editor
 - [Auth Guide](https://supabase.com/docs/guides/auth)
 - [Storage Guide](https://supabase.com/docs/guides/storage)
 
+

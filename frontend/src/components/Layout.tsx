@@ -44,7 +44,7 @@ const Layout = ({ children }: LayoutProps) => {
                   to={item.path}
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
                     isActive(item.path)
-                      ? "bg-primary/10 text-primary border border-primary/20"
+                      ? "text-white hover:text-white"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   }`}
                 >
