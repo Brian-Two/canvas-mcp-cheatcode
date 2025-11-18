@@ -7,6 +7,7 @@ import cors from 'cors';
 import { canvasClient } from '../canvasMCP.js';
 import { mcpManager, MCP_TYPES } from '../mcp/mcpManager.js';
 import { analyzeAssignment, buildJourneyFromAnalysis } from '../services/assignmentAnalysisService.js';
+import { reviewAssignment } from '../services/assignmentReviewService.js';
 
 console.log('🔵 Server file loaded! Starting setup...');
 
@@ -457,6 +458,83 @@ app.post('/api/assignments/analyze', async (req, res) => {
     console.error('❌ Assignment analysis error:', error);
     res.status(500).json({ 
       error: 'Failed to analyze assignment',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Review a completed assignment with AI feedback
+ * POST /api/assignments/review
+ * 
+ * Body: {
+ *   assignment: Assignment,
+ *   analysis: AssignmentAnalysis,
+ *   journey: AssignmentJourney,
+ *   stepNotes: Record<string, string>,
+ *   stepSubtasks: Record<string, Array<{id, text, completed}>>,
+ *   chatHistory: Array<{role, content}>,
+ *   finalWork?: string,
+ *   additionalContext?: string
+ * }
+ * 
+ * Returns: {
+ *   completeness: number,
+ *   strengths: string[],
+ *   improvements: string[],
+ *   rubricScores: Record<string, number>,
+ *   submissionReadiness: 'ready' | 'almost' | 'needs-work',
+ *   detailedFeedback: string,
+ *   recommendations: string[]
+ * }
+ */
+app.post('/api/assignments/review', async (req, res) => {
+  try {
+    const {
+      assignment,
+      analysis,
+      journey,
+      stepNotes,
+      stepSubtasks,
+      chatHistory,
+      finalWork,
+      additionalContext
+    } = req.body;
+    
+    console.log('🔍 Reviewing assignment:', assignment?.title);
+    
+    // Validate input
+    if (!assignment || !analysis || !journey) {
+      return res.status(400).json({ 
+        error: 'Assignment, analysis, and journey are required' 
+      });
+    }
+    
+    // Review the assignment
+    const review = await reviewAssignment({
+      assignment,
+      analysis,
+      journey,
+      stepNotes: stepNotes || {},
+      stepSubtasks: stepSubtasks || {},
+      chatHistory: chatHistory || [],
+      finalWork: finalWork || '',
+      additionalContext: additionalContext || ''
+    });
+    
+    console.log('✅ Review complete:', {
+      completeness: review.completeness,
+      readiness: review.submissionReadiness,
+      strengths: review.strengths.length,
+      improvements: review.improvements.length
+    });
+    
+    res.json(review);
+    
+  } catch (error) {
+    console.error('❌ Assignment review error:', error);
+    res.status(500).json({ 
+      error: 'Failed to review assignment',
       details: error.message 
     });
   }
