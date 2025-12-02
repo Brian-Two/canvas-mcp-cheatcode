@@ -23,9 +23,22 @@ export interface Assignment {
   rawDescription: string;
   courseName?: string;
   courseId?: string;
+  courseCode?: string;
   dueDate?: string; // ISO string
   points?: number;
   source?: "canvas" | "manual" | "other";
+}
+
+/**
+ * Canvas course context
+ * Phase 2: Canvas-aware journey generation
+ */
+export interface CanvasContext {
+  courseName: string;
+  courseCode?: string | null;
+  moduleTitles: string[];
+  keyPages: Array<{ title: string; url: string }>;
+  syllabusSnippet?: string | null;
 }
 
 /**
@@ -51,15 +64,40 @@ export interface AssignmentAnalysis {
 }
 
 /**
+ * An MCP action that can be triggered for a step
+ * Phase 2: MCP auto-suggestions
+ */
+export interface StepAction {
+  id: string;
+  label: string;
+  kind: 'mcp';
+  mcpType: string;
+  mcpTool: string;
+  payloadPreview?: any;
+}
+
+/**
  * A single step in the assignment completion journey
  */
+/**
+ * A resource link with usage guidance
+ */
+export interface Resource {
+  title: string;
+  url: string;
+  type: string;
+  howToUse?: string; // How to use this resource effectively
+  preview?: string; // Short description/preview
+}
+
 export interface JourneyStep {
   id: string;
   title: string;
   description: string;
   estimatedMinutes: number;
   status: "not_started" | "in_progress" | "completed";
-  resources?: string[]; // Optional learning resources for this step
+  resources?: Array<string | Resource>; // Optional learning resources
+  actions?: StepAction[]; // Optional MCP action suggestions (Phase 2)
 }
 
 /**

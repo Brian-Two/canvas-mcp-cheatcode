@@ -5,7 +5,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useLocation } from "react-router-dom";
-import { Sparkles, Menu, X, Upload, Plus, Trash2, CheckCircle2, ArrowUp, Star, File, FileText } from "lucide-react";
+import { Sparkles, Menu, X, Upload, Plus, Trash2, CheckCircle2, ArrowUp, Star, File, FileText, ExternalLink, Folder, Github } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -33,6 +33,8 @@ import type {
   AssignmentAnalysis,
   AssignmentJourney,
   JourneyStep,
+  StepAction,
+  CanvasContext,
 } from "@/domain/assignment";
 
 interface Message {
@@ -47,6 +49,16 @@ interface ContextItem {
   name: string;
   content: string;
   addedAt: Date;
+}
+
+type PendingField = 'title' | 'courseName' | 'dueDate';
+
+interface AssignmentDraft {
+  title?: string;
+  courseName?: string;
+  dueDate?: string;
+  points?: number;
+  rawDescription?: string;
 }
 
 const Astar = () => {
@@ -84,6 +96,10 @@ const Astar = () => {
   const [hoverTimeout, setHoverTimeout] = useState<NodeJS.Timeout | null>(null);
   const [isHoveringProgressBar, setIsHoveringProgressBar] = useState(false);
 
+  // Phase 2 State - Canvas context and MCP actions
+  const [canvasContext, setCanvasContext] = useState<CanvasContext | null>(null);
+  const [isMcpActionLoading, setIsMcpActionLoading] = useState(false);
+
   // Chat state
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -113,11 +129,17 @@ const Astar = () => {
   // Assignment selection state
   const [canvasAssignments, setCanvasAssignments] = useState<any[]>([]);
   const [loadingAssignments, setLoadingAssignments] = useState(false);
-  const [showManualInput, setShowManualInput] = useState(false);
-  const [manualTitle, setManualTitle] = useState('');
-  const [manualDescription, setManualDescription] = useState('');
-  const [manualDueDate, setManualDueDate] = useState('');
-  const [manualPoints, setManualPoints] = useState('');
+  const [intakeMessages, setIntakeMessages] = useState<Message[]>([
+    {
+      id: 'intake_intro',
+      role: 'assistant',
+      content: "Paste your entire assignment instructions here and I'll take it from there."
+    }
+  ]);
+  const [intakeInput, setIntakeInput] = useState('');
+  const [intakeProcessing, setIntakeProcessing] = useState(false);
+  const [assignmentDraft, setAssignmentDraft] = useState<AssignmentDraft | null>(null);
+  const [pendingField, setPendingField] = useState<PendingField | null>(null);
 
   // Phase 2A: Persistence state
   const [stepNotes, setStepNotes] = useState<Record<string, string>>({});
@@ -232,28 +254,6 @@ const Astar = () => {
     }
   };
 
-  const handleManualSubmit = () => {
-    if (!manualTitle.trim() || !manualDescription.trim()) {
-        toast({
-        title: 'Missing Information',
-        description: 'Please provide at least a title and description',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    const formattedAssignment: Assignment = {
-      id: `manual_${Date.now()}`,
-      title: manualTitle,
-      rawDescription: manualDescription,
-      dueDate: manualDueDate || undefined,
-      points: manualPoints ? parseInt(manualPoints) : undefined,
-      source: 'manual',
-    };
-    setAssignment(formattedAssignment);
-  };
-
-
   // Auto-analyze assignment on load (only for new assignments)
   useEffect(() => {
     if (assignment && !analysis && !journey) {
@@ -285,6 +285,12 @@ const Astar = () => {
       setAnalysis(result.analysis);
       setJourney(result.journey);
       setSteps(result.journey.steps);
+      
+      // Set Canvas context if available (Phase 2)
+      if (result.canvasContext) {
+        setCanvasContext(result.canvasContext);
+        console.log('✅ Canvas context loaded:', result.canvasContext);
+      }
 
       addMessage(
         "assistant",
@@ -320,6 +326,216 @@ const Astar = () => {
       content,
     };
     setMessages((prev) => [...prev, newMessage]);
+  };
+
+  const addIntakeMessage = (role: "user" | "assistant", content: string) => {
+    setIntakeMessages((prev) => [
+      ...prev,
+      {
+        id: `${Date.now()}_${Math.random()}`,
+        role,
+        content,
+      },
+    ]);
+  };
+
+  const formatDueDate = (iso?: string) => {
+    if (!iso) return 'Not provided yet';
+    const date = new Date(iso);
+    return isNaN(date.getTime()) ? iso : date.toLocaleDateString();
+  };
+
+  const parseDateFromText = (value?: string) => {
+    if (!value) return undefined;
+    const cleaned = value.replace(/(\d+)(st|nd|rd|th)/gi, '$1').trim();
+    const parsed = Date.parse(cleaned);
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed).toISOString();
+    }
+
+    const slashMatch = cleaned.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+    if (slashMatch) {
+      const [, month, day, year] = slashMatch;
+      const normalizedYear = year.length === 2 ? `20${year}` : year.padStart(4, '0');
+      const isoCandidate = new Date(`${normalizedYear}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`);
+      if (!isNaN(isoCandidate.getTime())) {
+        return isoCandidate.toISOString();
+      }
+    }
+    return undefined;
+  };
+
+  const parseAssignmentText = (text: string): AssignmentDraft => {
+    const draft: AssignmentDraft = {
+      rawDescription: text.trim()
+    };
+
+    const normalized = text.replace(/\r/g, '');
+    const lines = normalized
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean);
+
+    const titleLine = lines.find(line => /^(\*?\s*)?(title|assignment|project)\s*[:\-]/i.test(line));
+    if (titleLine) {
+      const [, valueRaw] = titleLine.split(/[:\-]/);
+      const value = titleLine.substring(titleLine.indexOf(':') + 1).trim();
+      draft.title = (value || valueRaw || '').trim();
+    } else if (lines[0] && lines[0].length <= 140) {
+      draft.title = lines[0];
+    }
+
+    const courseLine = lines.find(line => /^(\*?\s*)?(course|class)\s*[:\-]/i.test(line));
+    if (courseLine) {
+      draft.courseName = courseLine.substring(courseLine.indexOf(':') + 1).trim();
+    }
+
+    const dueLineMatch = normalized.match(/(?:due\s*(?:date)?|deadline)\s*[:\-]?\s*([^\n]+)/i);
+    if (dueLineMatch) {
+      const parsedDue = parseDateFromText(dueLineMatch[1]);
+      if (parsedDue) {
+        draft.dueDate = parsedDue;
+      }
+    } else {
+      const fallbackDateMatch = normalized.match(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/);
+      if (fallbackDateMatch) {
+        const parsedDue = parseDateFromText(fallbackDateMatch[1]);
+        if (parsedDue) {
+          draft.dueDate = parsedDue;
+        }
+      }
+    }
+
+    const pointsMatch = normalized.match(/(\d+)\s*(points|pts)/i);
+    if (pointsMatch) {
+      const pts = parseInt(pointsMatch[1], 10);
+      if (!Number.isNaN(pts)) {
+        draft.points = pts;
+      }
+    }
+
+    return draft;
+  };
+
+  const determineMissingFields = (draft: AssignmentDraft): PendingField[] => {
+    const missing: PendingField[] = [];
+    if (!draft.title) missing.push('title');
+    if (!draft.courseName) missing.push('courseName');
+    if (!draft.dueDate) missing.push('dueDate');
+    return missing;
+  };
+
+  const buildDraftSummary = (draft: AssignmentDraft) => {
+    const summaryLines = [
+      `• Title: ${draft.title || 'Not found yet'}`,
+      `• Course: ${draft.courseName || 'Not provided yet'}`,
+      `• Due Date: ${draft.dueDate ? formatDueDate(draft.dueDate) : 'Not provided yet'}`,
+      `• Points: ${draft.points !== undefined ? `${draft.points}` : 'Not specified'}`,
+    ];
+    return `Here's what I pulled from that assignment:\n${summaryLines.join('\n')}\n\nIf anything looks off, just tell me and I'll adjust.`;
+  };
+
+  const followUpQuestions: Record<PendingField, string> = {
+    title: "I couldn't find the assignment title. What should I call it?",
+    courseName: "Which course is this for? (e.g., CS 101)",
+    dueDate: "When is it due? Type a date like MM/DD/YYYY or say 'skip'."
+  };
+
+  const finalizeAssignmentFromDraft = (draft: AssignmentDraft) => {
+    const finalAssignment: Assignment = {
+      id: `manual_${Date.now()}`,
+      title: draft.title?.trim() || 'Untitled Assignment',
+      rawDescription: draft.rawDescription?.trim() || '',
+      courseName: draft.courseName?.trim() || undefined,
+      dueDate: draft.dueDate,
+      points: draft.points,
+      source: 'manual',
+    };
+
+    setAssignment(finalAssignment);
+    setAssignmentDraft(null);
+    setPendingField(null);
+    addIntakeMessage('assistant', `Awesome! I'm analyzing "${finalAssignment.title}" for you now.`);
+    addMessage("assistant", `Got your assignment "${finalAssignment.title}". Analyzing it right away!`);
+  };
+
+  const handlePendingFieldResponse = (field: PendingField, value: string) => {
+    if (!assignmentDraft) {
+      setPendingField(null);
+      setIntakeProcessing(false);
+      return;
+    }
+
+    const trimmedValue = value.trim();
+    const updatedDraft: AssignmentDraft = { ...assignmentDraft };
+
+    if (!trimmedValue || trimmedValue.toLowerCase() === 'skip') {
+      addIntakeMessage('assistant', field === 'dueDate' ? "No worries, we can skip the due date for now." : "Got it, we can leave that blank.");
+    } else if (field === 'dueDate') {
+      const parsed = parseDateFromText(trimmedValue);
+      if (!parsed) {
+        addIntakeMessage('assistant', "Hmm, I couldn't recognize that date. Could you use a format like MM/DD/YYYY? Or type 'skip'.");
+        setIntakeProcessing(false);
+        return;
+      }
+      updatedDraft.dueDate = parsed;
+      addIntakeMessage('assistant', `Due date set to ${formatDueDate(parsed)}.`);
+    } else if (field === 'courseName') {
+      updatedDraft.courseName = trimmedValue;
+      addIntakeMessage('assistant', `Great! I'll tag this as "${trimmedValue}".`);
+    } else if (field === 'title') {
+      updatedDraft.title = trimmedValue;
+      addIntakeMessage('assistant', `Perfect — I'll use "${trimmedValue}" as the title.`);
+    }
+
+    setAssignmentDraft(updatedDraft);
+    setPendingField(null);
+
+    const missing = determineMissingFields(updatedDraft);
+    if (missing.length > 0) {
+      const next = missing[0];
+      setPendingField(next);
+      addIntakeMessage('assistant', followUpQuestions[next]);
+      setIntakeProcessing(false);
+      return;
+    }
+
+    finalizeAssignmentFromDraft(updatedDraft);
+    setIntakeProcessing(false);
+  };
+
+  const handleIntakeSubmit = () => {
+    if (!intakeInput.trim() || intakeProcessing) return;
+
+    const userMessage = intakeInput.trim();
+    setIntakeInput('');
+    addIntakeMessage('user', userMessage);
+    setIntakeProcessing(true);
+
+    if (pendingField) {
+      handlePendingFieldResponse(pendingField, userMessage);
+      return;
+    }
+
+    const parsedDraft = parseAssignmentText(userMessage);
+    if (!parsedDraft.rawDescription) {
+      parsedDraft.rawDescription = userMessage;
+    }
+    setAssignmentDraft(parsedDraft);
+
+    addIntakeMessage('assistant', buildDraftSummary(parsedDraft));
+
+    const missing = determineMissingFields(parsedDraft);
+    if (missing.length > 0) {
+      const next = missing[0];
+      setPendingField(next);
+      addIntakeMessage('assistant', followUpQuestions[next]);
+      setIntakeProcessing(false);
+      return;
+    }
+
+    finalizeAssignmentFromDraft(parsedDraft);
+    setIntakeProcessing(false);
   };
 
   const handleSendMessage = async () => {
@@ -358,20 +574,7 @@ const Astar = () => {
         contextMessage += `\n## Current Step (${currentStepIndex + 1}/${steps.length})\n`;
         contextMessage += `Title: ${currentStep.title}\n`;
         contextMessage += `Description: ${currentStep.description}\n`;
-        contextMessage += `Estimated Time: ${currentStep.estimatedMinutes} minutes\n`;
         contextMessage += `Status: ${currentStep.status}\n`;
-        
-        // Include step notes if available
-        const notes = stepNotes[currentStep.id];
-        if (notes && notes.trim()) {
-          contextMessage += `\nStudent's Notes:\n${notes}\n`;
-        }
-
-        // Include subtasks if available
-        const subtasks = stepSubtasks[currentStep.id];
-        if (subtasks && subtasks.length > 0) {
-          contextMessage += `\nSubtasks:\n${subtasks.map(t => `${t.completed ? '✓' : '○'} ${t.text}`).join('\n')}\n`;
-        }
       }
 
       // User-added context items
@@ -430,47 +633,46 @@ Help the student with their current step. Be specific, encouraging, and actionab
           }
   };
 
-  // Step notes handlers
-  const handleNoteChange = (stepId: string, note: string) => {
-    setStepNotes(prev => ({
-      ...prev,
-      [stepId]: note
-    }));
-    saveStepNotes(stepId, note);
-  };
+  // MCP action handler (Phase 2)
+  const handleMcpAction = async (action: StepAction) => {
+    try {
+      setIsMcpActionLoading(true);
+      
+      // Call backend MCP endpoint
+      const response = await fetch(`http://localhost:3001/api/mcp/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tool: action.mcpTool,
+          parameters: action.payloadPreview
+        })
+      });
 
-  // Subtask handlers
-  const addSubtask = (stepId: string, text: string) => {
-    const newSubtask: Subtask = {
-      id: `subtask_${Date.now()}`,
-      text,
-      completed: false
-    };
-    setStepSubtasks(prev => ({
-      ...prev,
-      [stepId]: [...(prev[stepId] || []), newSubtask]
-    }));
-    saveStepSubtasks(stepId, [...(stepSubtasks[stepId] || []), newSubtask]);
-  };
-
-  const toggleSubtask = (stepId: string, subtaskId: string) => {
-    const updated = (stepSubtasks[stepId] || []).map(t =>
-      t.id === subtaskId ? { ...t, completed: !t.completed } : t
-    );
-    setStepSubtasks(prev => ({
-      ...prev,
-      [stepId]: updated
-    }));
-    saveStepSubtasks(stepId, updated);
-  };
-
-  const deleteSubtask = (stepId: string, subtaskId: string) => {
-    const updated = (stepSubtasks[stepId] || []).filter(t => t.id !== subtaskId);
-    setStepSubtasks(prev => ({
-      ...prev,
-      [stepId]: updated
-    }));
-    saveStepSubtasks(stepId, updated);
+      const result = await response.json();
+      
+      if (result.success) {
+        toast({
+          title: 'Success!',
+          description: result.message || `${action.label} completed successfully`,
+        });
+        
+        // If GitHub repo created, show link
+        if (result.repoUrl) {
+          window.open(result.repoUrl, '_blank');
+        }
+      } else {
+        throw new Error(result.error || 'Action failed');
+      }
+    } catch (error: any) {
+      console.error('MCP action error:', error);
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to execute action',
+        variant: 'destructive'
+      });
+    } finally {
+      setIsMcpActionLoading(false);
+    }
   };
 
   const handleSelectWorkflow = (workflow: Workflow) => {
@@ -801,70 +1003,62 @@ Help the student with their current step. Be specific, encouraging, and actionab
         )}
           </div>
 
-              {/* Manual Input */}
+              {/* Manual Input via Chat */}
               <div className="space-y-4">
                 <h2 className="text-2xl font-bold text-foreground">Manual Input</h2>
                 
                 <div className="p-6 bg-card border border-border rounded-lg space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-2">
-                      Assignment Title *
-                    </label>
-                    <input
-                      type="text"
-                      value={manualTitle}
-                      onChange={(e) => setManualTitle(e.target.value)}
-                      placeholder="e.g., Lab #5 - Data Structures"
-                      className="w-full px-3 py-2 bg-background border border-border rounded-md focus:border-primary text-foreground"
-                    />
-              </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-2">
-                      Description *
-                    </label>
-                  <Textarea
-                      value={manualDescription}
-                      onChange={(e) => setManualDescription(e.target.value)}
-                      placeholder="Paste the assignment description here..."
-                      className="min-h-[120px] bg-background border-border"
-                    />
-                </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-foreground mb-2">
-                        Due Date
-                      </label>
-                  <input
-                        type="date"
-                        value={manualDueDate}
-                        onChange={(e) => setManualDueDate(e.target.value)}
-                        className="w-full px-3 py-2 bg-background border border-border rounded-md focus:border-primary text-foreground"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-foreground mb-2">
-                        Points
-                      </label>
-                      <input
-                        type="number"
-                        value={manualPoints}
-                        onChange={(e) => setManualPoints(e.target.value)}
-                        placeholder="100"
-                        className="w-full px-3 py-2 bg-background border border-border rounded-md focus:border-primary text-foreground"
-                      />
-                    </div>
+                  <div className="space-y-3 max-h-[420px] overflow-y-auto pr-2">
+                    {intakeMessages.map((msg) => (
+                      <div
+                        key={msg.id}
+                        className={`flex ${msg.role === 'assistant' ? 'justify-start' : 'justify-end'}`}
+                      >
+                        <div
+                          className={`max-w-[80%] px-4 py-3 rounded-2xl border ${
+                            msg.role === 'assistant'
+                              ? 'bg-muted/60 border-border rounded-bl-none text-foreground'
+                              : 'bg-primary text-primary-foreground rounded-br-none border-primary/40 shadow-glow'
+                          }`}
+                          style={{ whiteSpace: 'pre-wrap' }}
+                        >
+                          {msg.content}
+                        </div>
+                      </div>
+                    ))}
                   </div>
 
-                  <Button
-                    onClick={handleManualSubmit}
-                    className="w-full bg-gradient-primary text-white shadow-glow"
-                  >
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    Start with ASTAR
-                  </Button>
+                  <div className="space-y-2">
+                    <Textarea
+                      value={intakeInput}
+                      onChange={(e) => setIntakeInput(e.target.value)}
+                      placeholder="Paste your entire assignment instructions here..."
+                      className="min-h-[120px] bg-background border-border"
+                      disabled={intakeProcessing}
+                    />
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-muted-foreground">
+                        Tip: include the title, course, due date, requirements, and deliverables.
+                      </p>
+                      <Button
+                        onClick={handleIntakeSubmit}
+                        disabled={intakeProcessing || !intakeInput.trim()}
+                        className="bg-gradient-primary text-white shadow-glow"
+                      >
+                        {intakeProcessing ? (
+                          <>
+                            <Sparkles className="w-4 h-4 mr-2 animate-spin" />
+                            Thinking...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-4 h-4 mr-2" />
+                            Send
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -905,9 +1099,6 @@ Help the student with their current step. Be specific, encouraging, and actionab
                     </h3>
                     <p className="text-muted-foreground">
                       {step.description}
-                    </p>
-                    <p className="text-sm text-primary mt-2">
-                      Estimated: {step.estimatedMinutes} minutes
                     </p>
                   </div>
                 </div>
@@ -958,12 +1149,9 @@ Help the student with their current step. Be specific, encouraging, and actionab
       <div className="h-screen flex flex-col bg-background/95 backdrop-blur-sm">
         {/* Header */}
         <div className="text-center py-8 px-8">
-          <h2 className="text-3xl font-bold text-foreground mb-2">
+          <h2 className="text-3xl font-bold text-foreground">
             {assignment?.title || "Your Journey"}
           </h2>
-          <p className="text-muted-foreground">
-            Estimated time: {totalHours > 0 ? `${totalHours}h ` : ''}{remainingMinutes}min
-          </p>
         </div>
 
         {/* Horizontal Timeline - Scrollable */}
@@ -1022,9 +1210,6 @@ Help the student with their current step. Be specific, encouraging, and actionab
                               <h3 className="text-lg font-bold text-foreground group-hover:text-primary transition-colors">
                                 {step.title}
                               </h3>
-                              <span className="px-2 py-1 bg-primary/10 text-primary text-xs font-medium rounded-full whitespace-nowrap">
-                                {step.estimatedMinutes} min
-                              </span>
                 </div>
                             <p className="text-sm text-muted-foreground leading-relaxed line-clamp-3">
                               {step.description}
@@ -1064,9 +1249,6 @@ Help the student with their current step. Be specific, encouraging, and actionab
                               <h3 className="text-lg font-bold text-foreground group-hover:text-primary transition-colors">
                                 {step.title}
                               </h3>
-                              <span className="px-2 py-1 bg-primary/10 text-primary text-xs font-medium rounded-full whitespace-nowrap">
-                                {step.estimatedMinutes} min
-                              </span>
                             </div>
                             <p className="text-sm text-muted-foreground leading-relaxed line-clamp-3">
                               {step.description}
@@ -1309,16 +1491,55 @@ Help the student with their current step. Be specific, encouraging, and actionab
                 </div>
             ) : currentStep ? (
               <div className="max-w-3xl mx-auto space-y-8">
+                {/* Canvas Context (Phase 2) */}
+                {assignment?.courseId && canvasContext && (
+                  <div className="mb-6 p-4 bg-muted/50 rounded-lg border border-border">
+                    <h3 className="font-semibold text-sm text-foreground mb-3 flex items-center gap-2">
+                      <Folder className="w-4 h-4" />
+                      Course Context
+                    </h3>
+                    
+                    {canvasContext.moduleTitles?.length > 0 && (
+                      <div className="mb-3">
+                        <p className="text-xs text-muted-foreground mb-1">Modules:</p>
+                        <ul className="text-xs space-y-1">
+                          {canvasContext.moduleTitles.slice(0, 5).map((module, idx) => (
+                            <li key={idx} className="text-muted-foreground">• {module}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    
+                    {canvasContext.keyPages?.length > 0 && (
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Course Pages:</p>
+                        <ul className="text-xs space-y-1">
+                          {canvasContext.keyPages.map((page, idx) => (
+                            <li key={idx}>
+                              <a 
+                                href={page.url} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-primary hover:underline flex items-center gap-1"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                {page.title}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Step Title & Description - No Boxes */}
                 <div className="space-y-4">
                   <div className="flex items-start justify-between">
                     <div>
-                      <h2 className="text-3xl font-bold text-foreground mb-2">
+                      <h2 className="text-3xl font-bold text-foreground">
                         {currentStep.title}
                       </h2>
-                      <p className="text-muted-foreground">
-                        Estimated time: {currentStep.estimatedMinutes} minutes
-                        </p>
                       </div>
                     <div className="flex gap-2">
                       {currentStep.status === "not_started" && (
@@ -1345,100 +1566,77 @@ Help the student with their current step. Be specific, encouraging, and actionab
                       {currentStep.description}
                     </p>
 
+                    {/* MCP Action Buttons (Phase 2) */}
+                    {currentStep.actions && currentStep.actions.length > 0 && (
+                      <div className="mt-6 p-4 bg-primary/5 border border-primary/20 rounded-lg">
+                        <h4 className="text-sm font-medium text-foreground mb-3">⚡ Quick Actions:</h4>
+                        <div className="flex flex-wrap gap-2">
+                          {currentStep.actions.map((action) => (
+                            <Button
+                              key={action.id}
+                              onClick={() => handleMcpAction(action)}
+                              disabled={isMcpActionLoading}
+                              className="flex items-center gap-2"
+                              variant="default"
+                            >
+                              {action.mcpType === 'github' && <Github className="w-4 h-4" />}
+                              {action.label}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {currentStep.resources && currentStep.resources.length > 0 && (
                       <div className="mt-6">
-                        <h3 className="font-semibold text-foreground mb-3">Resources:</h3>
-                        <ul className="space-y-2">
-                          {currentStep.resources.map((resource, idx) => (
-                            <li key={idx} className="text-muted-foreground">
-                              • {resource}
-                            </li>
-                          ))}
-                        </ul>
+                        <h3 className="font-semibold text-foreground mb-4">📚 Helpful Resources:</h3>
+                        <div className="space-y-3">
+                          {currentStep.resources.map((resource, idx) => {
+                            // Handle both string and object resources
+                            const isObject = typeof resource === 'object' && resource !== null;
+                            const title = isObject ? resource.title : resource;
+                            const url = isObject ? resource.url : (resource.startsWith('http') ? resource : null);
+                            const preview = isObject && 'preview' in resource ? resource.preview : null;
+                            const howToUse = isObject && 'howToUse' in resource ? resource.howToUse : null;
+                            
+                            return (
+                              <div
+                                key={idx}
+                                className="p-4 rounded-lg border border-border bg-background/50 hover:border-primary/50 transition-colors"
+                              >
+                                <a
+                                  href={url || '#'}
+                                  target={url ? "_blank" : undefined}
+                                  rel={url ? "noopener noreferrer" : undefined}
+                                  className="flex items-start gap-3 group"
+                                >
+                                  <ExternalLink className={`w-5 h-5 flex-shrink-0 mt-0.5 ${url ? 'text-primary group-hover:text-primary' : 'text-muted-foreground'}`} />
+                                  <div className="flex-1">
+                                    <h4 className="font-medium text-foreground group-hover:text-primary transition-colors">
+                                      {title}
+                                    </h4>
+                                    {preview && (
+                                      <p className="text-sm text-muted-foreground mt-1">
+                                        {preview}
+                                      </p>
+                                    )}
+                                    {howToUse && (
+                                      <div className="mt-2 p-2 bg-primary/5 rounded border-l-2 border-primary/30">
+                                        <p className="text-xs text-muted-foreground">
+                                          <span className="font-medium text-primary">How to use: </span>
+                                          {howToUse}
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+                                </a>
+                              </div>
+                            );
+                          })}
+                        </div>
             </div>
           )}
         </div>
-
-                  {/* Step Notes */}
-                  <div className="mt-8 border-t border-border pt-6">
-                    <h3 className="font-semibold text-foreground mb-3">📝 Your Notes</h3>
-          <Textarea
-                      placeholder="Take notes about this step, your progress, questions, etc..."
-                      value={stepNotes[currentStep.id] || ''}
-                      onChange={(e) => handleNoteChange(currentStep.id, e.target.value)}
-                      className="min-h-[120px] bg-background/50 border-border"
-          />
-        </div>
-
-                  {/* Subtasks */}
-                  <div className="mt-6 border-t border-border pt-6">
-                    <h3 className="font-semibold text-foreground mb-3">✓ Subtasks</h3>
-                    
-                    {/* Subtask List */}
-                    {stepSubtasks[currentStep.id] && stepSubtasks[currentStep.id].length > 0 && (
-                      <div className="space-y-2 mb-4">
-                        {stepSubtasks[currentStep.id].map((subtask) => (
-                          <div
-                            key={subtask.id}
-                            className="flex items-center gap-3 p-3 bg-background/30 rounded-lg border border-border"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={subtask.completed}
-                              onChange={() => toggleSubtask(currentStep.id, subtask.id)}
-                              className="w-5 h-5 rounded border-2 border-primary text-primary focus:ring-primary cursor-pointer"
-                            />
-                            <span
-                              className={`flex-1 ${
-                                subtask.completed
-                                  ? 'text-muted-foreground line-through'
-                                  : 'text-foreground'
-                              }`}
-                            >
-                              {subtask.text}
-                            </span>
-          <Button
-            size="icon"
-                              variant="ghost"
-                              onClick={() => deleteSubtask(currentStep.id, subtask.id)}
-                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            >
-                              <Trash2 className="w-4 h-4" />
-          </Button>
-            </div>
-                        ))}
-          </div>
-                    )}
-
-                    {/* Add Subtask */}
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="Add a subtask..."
-                        value={newSubtaskText}
-                        onChange={(e) => setNewSubtaskText(e.target.value)}
-                        onKeyPress={(e) => {
-                          if (e.key === 'Enter' && newSubtaskText.trim()) {
-                            addSubtask(currentStep.id, newSubtaskText);
-                            setNewSubtaskText('');
-                          }
-                        }}
-                        className="flex-1 px-4 py-2 bg-background/50 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-            <Button
-                        onClick={() => {
-                          if (newSubtaskText.trim()) {
-                            addSubtask(currentStep.id, newSubtaskText);
-                            setNewSubtaskText('');
-                          }
-                        }}
-                        size="icon"
-                        className="bg-primary hover:bg-primary/90"
-                      >
-                        <Plus className="w-4 h-4" />
-            </Button>
-                    </div>
-                  </div>
 
                   {/* Complete Button at Bottom */}
                   {currentStep.status === "in_progress" && (
@@ -1767,8 +1965,6 @@ Help the student with their current step. Be specific, encouraging, and actionab
                         Auto-collected:
                       </h3>
                       <ul className="space-y-2 text-sm text-muted-foreground">
-                        <li>• All step notes ({Object.keys(stepNotes).length} steps)</li>
-                        <li>• All subtasks ({Object.values(stepSubtasks).reduce((sum, subs) => sum + subs.length, 0)} total)</li>
                         <li>• Chat history ({messages.length} messages)</li>
                         <li>• Assignment requirements</li>
                         <li>• Journey progress</li>

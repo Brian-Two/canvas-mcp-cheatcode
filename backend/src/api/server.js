@@ -8,6 +8,7 @@ import { canvasClient } from '../canvasMCP.js';
 import { mcpManager, MCP_TYPES } from '../mcp/mcpManager.js';
 import { analyzeAssignment, buildJourneyFromAnalysis } from '../services/assignmentAnalysisService.js';
 import { reviewAssignment } from '../services/assignmentReviewService.js';
+import { getCanvasContextForAssignment } from '../services/canvasContextService.js';
 
 console.log('🔵 Server file loaded! Starting setup...');
 
@@ -395,6 +396,61 @@ app.post('/api/mcp/github/execute', async (req, res) => {
   }
 });
 
+// Execute MCP action (generic endpoint for UI-triggered actions)
+app.post('/api/mcp/execute', async (req, res) => {
+  try {
+    const { tool, parameters } = req.body;
+
+    if (!tool) {
+      return res.status(400).json({ success: false, error: 'Tool name required' });
+    }
+
+    console.log(`🔧 Executing MCP tool: ${tool}`);
+
+    // Handle GitHub tools
+    if (tool.startsWith('github_')) {
+      const githubServers = mcpManager.getServersByType(MCP_TYPES.GITHUB)
+        .filter(s => s.status === 'connected');
+
+      if (githubServers.length === 0) {
+        return res.status(400).json({ 
+          success: false, 
+          error: 'GitHub MCP not connected. Please connect GitHub in settings.' 
+        });
+      }
+
+      const githubClient = githubServers[0].getGitHubClient();
+
+      if (tool === 'github_create_repo') {
+        const result = await githubClient.createRepository(parameters);
+        return res.json({
+          success: true,
+          message: `Repository "${parameters.name}" created successfully!`,
+          repoUrl: result.html_url,
+          repoData: result
+        });
+      }
+
+      // Add more GitHub tools as needed...
+      return res.status(400).json({ success: false, error: `GitHub tool ${tool} not implemented in this endpoint` });
+    }
+
+    // Handle Google Drive/Docs tools (placeholder for future implementation)
+    if (tool.startsWith('gdrive_') || tool.startsWith('create_google_')) {
+      return res.status(501).json({ 
+        success: false, 
+        error: 'Google Drive integration coming soon!' 
+      });
+    }
+
+    // Unknown tool
+    res.status(400).json({ success: false, error: 'Unknown tool' });
+  } catch (error) {
+    console.error('MCP execute error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ==============================================================================
 // ASSIGNMENT ANALYSIS (NEW - Phase 1)
 // ==============================================================================
@@ -440,18 +496,25 @@ app.post('/api/assignments/analyze', async (req, res) => {
       deliverables: analysis.deliverables.length
     });
     
-    // Build journey from analysis
-    const journey = buildJourneyFromAnalysis(analysis);
+    // Build journey from analysis (pass assignment for AI generation)
+    const journey = await buildJourneyFromAnalysis(analysis, assignment);
     console.log('✅ Journey generated:', {
       steps: journey.steps.length,
       totalMinutes: journey.totalEstimatedMinutes
     });
     
+    // Fetch Canvas context if this is a Canvas assignment (Phase 2)
+    let canvasContext = null;
+    if (assignment.courseId) {
+      canvasContext = await getCanvasContextForAssignment(assignment);
+    }
+    
     res.json({
       success: true,
       assignment,
       analysis,
-      journey
+      journey,
+      canvasContext // Phase 2: Include Canvas context
     });
     
   } catch (error) {

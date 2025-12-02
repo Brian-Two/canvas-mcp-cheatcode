@@ -439,8 +439,8 @@ app.post('/api/assignments/analyze', async (req, res) => {
       deliverables: analysis.deliverables.length
     });
     
-    // Build journey from analysis
-    const journey = buildJourneyFromAnalysis(analysis);
+    // Build journey from analysis (pass assignment for AI generation)
+    const journey = await buildJourneyFromAnalysis(analysis, assignment);
     console.log('✅ Journey generated:', {
       steps: journey.steps.length,
       totalMinutes: journey.totalEstimatedMinutes

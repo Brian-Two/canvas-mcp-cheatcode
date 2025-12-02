@@ -5,10 +5,14 @@
  * and generates a step-by-step journey for completion.
  * 
  * Phase 1: Simple heuristic-based analysis with keyword matching
- * Future: Enhance with LLM-based analysis for more nuanced understanding
+ * Phase 2B: AI-powered personalized journey generation with template fallback
  */
 
 import '../domain/assignment.js'; // For JSDoc types
+import { generateJourneyWithAI } from './aiJourneyService.js';
+import { enhanceStepResources } from './resourceRecommendationService.js';
+import { getCanvasContextForAssignment } from './canvasContextService.js';
+import { enhanceJourneyWithMcpActions } from './mcpActionSuggestionService.js';
 
 /**
  * Analyzes an assignment to determine its type, requirements, and complexity
@@ -51,42 +55,82 @@ export async function analyzeAssignment(assignment) {
 
 /**
  * Builds a step-by-step journey from an assignment analysis
+ * Uses AI if enabled, otherwise falls back to template-based generation
  * 
  * @param {import('../domain/assignment.js').AssignmentAnalysis} analysis
- * @returns {import('../domain/assignment.js').AssignmentJourney}
+ * @param {import('../domain/assignment.js').Assignment} [assignment] - Optional assignment object for AI generation
+ * @returns {Promise<import('../domain/assignment.js').AssignmentJourney>}
  */
-export function buildJourneyFromAnalysis(analysis) {
+export async function buildJourneyFromAnalysis(analysis, assignment = null) {
   const { assignmentId, type } = analysis;
 
-  let steps = [];
+  let journey;
 
-  switch (type) {
-    case 'essay':
-      steps = buildEssayJourney(analysis);
-      break;
-    case 'coding_project':
-      steps = buildCodingProjectJourney(analysis);
-      break;
-    case 'problem_set':
-      steps = buildProblemSetJourney(analysis);
-      break;
-    case 'research_paper':
-      steps = buildResearchPaperJourney(analysis);
-      break;
-    case 'presentation':
-      steps = buildPresentationJourney(analysis);
-      break;
-    default:
-      steps = buildGenericJourney(analysis);
+  // Try AI generation if assignment is provided
+  if (assignment) {
+    try {
+      console.log('🤖 Using AI to generate personalized journey');
+      
+      // Fetch Canvas context if this is a Canvas assignment
+      let canvasContext = null;
+      if (assignment.courseId) {
+        canvasContext = await getCanvasContextForAssignment(assignment);
+      }
+      
+      journey = await generateJourneyWithAI(assignment, analysis, canvasContext);
+    } catch (error) {
+      console.warn('⚠️ AI journey generation failed, falling back to templates:', error.message);
+      // Fall through to template-based generation
+      journey = null;
+    }
   }
 
-  const totalEstimatedMinutes = steps.reduce((sum, step) => sum + step.estimatedMinutes, 0);
+  // Fallback to template-based generation if AI failed or assignment not provided
+  if (!journey) {
+    let steps = [];
 
-  return {
-    assignmentId,
-    totalEstimatedMinutes,
-    steps
-  };
+    switch (type) {
+      case 'essay':
+        steps = buildEssayJourney(analysis);
+        break;
+      case 'coding_project':
+        steps = buildCodingProjectJourney(analysis);
+        break;
+      case 'problem_set':
+        steps = buildProblemSetJourney(analysis);
+        break;
+      case 'research_paper':
+        steps = buildResearchPaperJourney(analysis);
+        break;
+      case 'presentation':
+        steps = buildPresentationJourney(analysis);
+        break;
+      default:
+        steps = buildGenericJourney(analysis);
+    }
+
+    // Enhance steps with AI-powered resources
+    const enhancedSteps = await Promise.all(steps.map(async (step) => ({
+      ...step,
+      resources: await enhanceStepResources(step.resources || [], step, analysis, assignment || {})
+    })));
+
+    const totalEstimatedMinutes = enhancedSteps.reduce((sum, step) => sum + step.estimatedMinutes, 0);
+
+    journey = {
+      assignmentId,
+      totalEstimatedMinutes,
+      steps: enhancedSteps
+    };
+  }
+
+  // Enhance journey with MCP action suggestions
+  if (assignment) {
+    journey = enhanceJourneyWithMcpActions(journey, assignment);
+    console.log('✅ Enhanced journey with MCP action suggestions');
+  }
+
+  return journey;
 }
 
 // ============================================================================

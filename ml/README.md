@@ -310,3 +310,4 @@ open reports/clusters.png
 - A★ Codebase: `backend/src/canvasMCP.js`, `frontend/src/lib/folderManager.ts`
 
 
+
