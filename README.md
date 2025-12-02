@@ -1,6 +1,6 @@
-# ASTAR - AI-Powered Critical Thinking Platform
+# ASTAR - AI-Powered Learning Platform
 
-**Bring Back Critical Thinking**
+**Preserve Critical Thinking**
 
 An AI-powered learning platform that helps anyone think critically through complex problems using Socratic questioning. Integrated with Canvas LMS and multiple MCP servers for personalized assistance using course materials as RAG context.
 

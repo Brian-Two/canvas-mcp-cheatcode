@@ -37,21 +37,24 @@ const AssignmentCard = ({
   const isOverdue = isPast && !isCompleted;
 
   const handleAssignmentClick = () => {
+    // Navigate to ASTAR with Assignment domain model
     navigate('/astar', { 
       state: { 
         assignment: {
           id,
           title,
-          course,
-          courseColor,
-          description,
+          rawDescription: description,
+          courseName: course,
           dueDate,
+          source: "canvas" as const,
+          // Additional Canvas fields
+          courseColor,
           daysUntilDue,
           points,
           isCompleted,
           submissionStatus,
           submissionScore,
-          submissionGrade
+          submissionGrade,
         }
       }
     });
