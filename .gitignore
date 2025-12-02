@@ -38,10 +38,17 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# ML artifacts
-ml/data/
-ml/models/
-ml/reports/
+# ML artifacts (but keep sample data and reports for demo)
+data/*.csv
+!data/training_sample.csv
+ml/models/*.pkl
+ml/models/*.joblib
+ml/reports/*.png
+ml/reports/*.pdf
+# Keep markdown reports and JSON metrics
+!ml/reports/*.md
+!ml/reports/*.json
+!ml/reports/*.csv
 *.pkl
 *.csv
 
