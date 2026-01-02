@@ -1,4 +1,4 @@
-# ASTAR - AI-Powered Learning Platform
+AI-Powered Learning Platform
 
 **Preserve Critical Thinking**
 
