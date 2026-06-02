@@ -1,4 +1,4 @@
-# ASTAR Backend (LangGraph + NVIDIA NIM + Canvas Integration)
+# Backend (LangGraph + NVIDIA NIM + Canvas Integration)
 
 AI-powered learning platform that helps anyone think critically through complex problems using Socratic questioning. Integrated with Canvas LMS for personalized assignment help using course materials as RAG context.
 
