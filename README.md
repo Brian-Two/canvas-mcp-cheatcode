@@ -7,7 +7,7 @@ An AI-powered learning platform that helps anyone think critically through compl
 ## 🏗️ Project Structure
 
 ```
-nvidia-hacks/
+canvas-mcp-cheatcode/
 ├── backend/           # Node.js + Express + LangGraph + NVIDIA NIM
 │   ├── src/
 │   │   ├── api/       # REST API server
@@ -134,7 +134,7 @@ npm run dev
 
 ## 🔌 MCP Server Support
 
-ASTAR supports multiple MCP (Model Context Protocol) servers:
+ supports multiple MCP (Model Context Protocol) servers:
 
 | Service | Type | Description |
 |---------|------|-------------|
@@ -322,7 +322,6 @@ VITE_API_URL=https://your-backend-domain.com
 
 ## 📖 Learning Philosophy
 
-ASTAR follows cognitive science principles:
 
 - **Active Recall:** Retrieve information from memory
 - **Elaboration:** Connect new knowledge to existing
