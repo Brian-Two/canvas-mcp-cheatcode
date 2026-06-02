@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document explains the Canvas MCP integration for A★ Tutor, which enables students to connect their Canvas LMS account to receive personalized help with assignments and exams using course materials as RAG context.
+This document explains the Canvas MCP integration for the Tutor, which enables students to connect their Canvas LMS account to receive personalized help with assignments and exams using course materials as RAG context.
 
 ## Architecture
 
