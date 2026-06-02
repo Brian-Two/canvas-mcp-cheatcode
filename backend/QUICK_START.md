@@ -1,4 +1,4 @@
-# ASTAR Backend - Quick Start
+# Backend - Quick Start
 
 ## 🚀 Get Started in 3 Steps
 
