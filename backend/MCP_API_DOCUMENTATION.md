@@ -2,7 +2,7 @@
 
 ## Overview
 
-ASTAR supports multiple MCP (Model Context Protocol) server connections, allowing users to integrate various services for enhanced AI assistance.
+supports multiple MCP (Model Context Protocol) server connections, allowing users to integrate various services for enhanced AI assistance.
 
 ## Supported MCP Server Types
 
