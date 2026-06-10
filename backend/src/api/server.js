@@ -6,6 +6,7 @@ import cors from 'cors';
 // import { buildGraph } from '../graph.js';
 import { canvasClient } from '../canvasMCP.js';
 import { mcpManager, MCP_TYPES } from '../mcp/mcpManager.js';
+import { generateTrainingCsv } from '../utils/exportTrainingCsv.js';
 import { analyzeAssignment, buildJourneyFromAnalysis } from '../services/assignmentAnalysisService.js';
 import { reviewAssignment } from '../services/assignmentReviewService.js';
 import { getCanvasContextForAssignment } from '../services/canvasContextService.js';
@@ -1205,6 +1206,53 @@ app.post('/api/courses/:courseId/pages/:pageUrl', async (req, res) => {
   }
 });
 
+// ==============================================================================
+// ML TRAINING DATA EXPORT
+// ==============================================================================
+
+// Export training data for ML pipeline
+app.post('/api/export/training', async (req, res) => {
+  try {
+    const { includePast = true, sessionSummaries = [] } = req.body;
+    
+    console.log('📊 Exporting training data...');
+    console.log(`  Include past assignments: ${includePast}`);
+    console.log(`  Session summaries provided: ${sessionSummaries.length}`);
+    
+    // Fetch Canvas assignments
+    const assignments = await canvasClient.getUpcomingAssignments(1000, includePast);
+    
+    if (assignments.error) {
+      console.error('❌ Canvas API Error:', assignments.error);
+      return res.status(500).json({ error: assignments.error });
+    }
+    
+    console.log(`✅ Fetched ${assignments.length} assignments from Canvas`);
+    
+    // Generate CSV with feature engineering
+    const result = await generateTrainingCsv(assignments, sessionSummaries, {
+      anonymize: true,
+    });
+    
+    console.log('✅ Training CSV generated:');
+    console.log(`  Rows: ${result.rowCount}`);
+    console.log(`  Features: ${result.features}`);
+    console.log(`  Path: ${result.filePath}`);
+    
+    res.json({
+      success: true,
+      message: 'Training data exported successfully',
+      ...result,
+    });
+  } catch (error) {
+    console.error('❌ Export training data error:', error);
+    res.status(500).json({ 
+      error: 'Failed to export training data',
+      details: error.message 
+    });
+  }
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ 
@@ -1245,6 +1293,8 @@ app.listen(PORT, () => {
   console.log(`\n  Chat:`);
   console.log(`    POST /api/chat`);
   console.log(`    POST /api/chat/stream`);
+  console.log(`\n  ML Pipeline:`);
+  console.log(`    POST /api/export/training`);
   console.log(`\n✨ Ready to receive requests!\n`);
 });
 

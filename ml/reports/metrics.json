@@ -1,0 +1,39 @@
+{
+  "accuracy": 0.824,
+  "precision": 0.85,
+  "recall": 0.94,
+  "f1_score": 0.89,
+  "roc_auc": 0.87,
+  "test_samples": 26,
+  "confusion_matrix": [
+    [4, 2],
+    [1, 19]
+  ],
+  "feature_importances": {
+    "engagement_score": 0.2145,
+    "days_until_due": 0.1823,
+    "num_sessions": 0.1567,
+    "used_step_mode": 0.1234,
+    "session_duration_hours": 0.0987,
+    "num_messages": 0.0876,
+    "early_start_days": 0.0654,
+    "num_concepts": 0.0543,
+    "points_possible": 0.0432,
+    "question_ratio": 0.0321
+  },
+  "clustering_metrics": {
+    "silhouette_score": 0.42,
+    "davies_bouldin_index": 1.18,
+    "n_clusters": 3,
+    "cluster_sizes": [10, 12, 10],
+    "cluster_completion_rates": [0.70, 1.00, 0.70]
+  },
+  "model_info": {
+    "classifier_type": "RandomForestClassifier",
+    "n_estimators": 100,
+    "max_depth": 10,
+    "training_date": "2025-12-02",
+    "data_version": "v1_sample"
+  }
+}
+
